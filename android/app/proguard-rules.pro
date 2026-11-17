@@ -1,0 +1,3 @@
+-keepattributes Signature
+-keep class com.google.gson.** { *; }
+-keep class in.travelassist.app.data.** { *; }
