@@ -10,28 +10,32 @@ Travel Assist is an Android (Kotlin, Jetpack Compose, Material 3) client and Fas
 - Trip expense records, equal/custom participant splits, balances, and greedy settlement suggestions.
 - Trip-member WebSocket chat with persisted messages.
 - Opt-in expiring live-location updates, member access checks, and immediate stop-sharing.
-- Android login, dashboard, route search, trip creation, expense entry, and trip chat screens.
+- Android login, dashboard, route search, trip creation, expense entry, trip chat, and Integrations & Add-ons Center screens.
+- Admin-only integration configuration with Fernet-encrypted credentials, a fixed provider catalog, health-test status, and per-user add-on preferences.
 - PostgreSQL Alembic migration and SQLite-backed automated backend tests.
 
-This is not a ticketing or booking system. It cannot confirm inventory, fares, or availability unless an authorized live provider is configured. The Android project has not been built into an APK in this environment; see [Build status](#build-status).
+This is not a ticketing or booking system. It cannot confirm inventory, fares, or availability unless an authorized live provider is configured. The integration catalog is configuration scaffolding: no live provider adapter or credential is included, so connection tests report `provider_unavailable` until one is implemented and authorized.
 
 ## Layout
 
 - `android/` — Android Studio project.
 - `backend/` — FastAPI, SQLAlchemy, provider interfaces, and Alembic migrations.
 - `docker-compose.yml` — local PostgreSQL service.
+- `docs/` — deployment guide and security/readiness review.
+- `.github/workflows/ci.yml` — backend tests, Android compile/unit-test task, and debug APK artifact upload.
 - `.env.example` — configuration template.
 
 ## Run the backend
 
 1. Install Python 3.11+ and PostgreSQL 15+ (or use Docker Compose).
-2. Copy `.env.example` to `.env`; set a unique `JWT_SECRET` and a PostgreSQL `DATABASE_URL`.
-3. Start PostgreSQL: `docker compose up -d db`.
-4. Create a virtual environment and install `backend/requirements.txt`.
-5. From `backend/`, run `alembic upgrade head` then `uvicorn app.main:app --reload`.
-6. API docs are served at `http://localhost:8000/docs`.
+2. Copy `.env.example` to `.env`; set a unique `JWT_SECRET`, a PostgreSQL `DATABASE_URL`, and `ADMIN_EMAILS` for provider administration.
+3. Generate `INTEGRATION_ENCRYPTION_KEY` with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and keep it in secret storage. Losing or rotating this key without re-encrypting credentials makes saved credentials unreadable.
+4. Start PostgreSQL: `docker compose up -d db`.
+5. Create a virtual environment and install `backend/requirements.txt`.
+6. From `backend/`, run `alembic upgrade head` then `uvicorn app.main:app --reload`.
+7. API docs are served at `http://localhost:8000/docs`.
 
-The app does not create tables at startup by default. `AUTO_CREATE_TABLES=true` is available only as a local-development convenience. Apply Alembic migrations before starting a deployed instance.
+Alternatively, follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) to run the API in Docker Compose. The app does not create tables at startup by default. `AUTO_CREATE_TABLES=true` is available only as a local-development convenience. Apply Alembic migrations before starting a deployed instance.
 
 ## Run tests
 
@@ -46,9 +50,9 @@ Tests use a temporary SQLite database and do not require PostgreSQL or provider 
 
 ## Android
 
-Open `android/` in Android Studio (JDK 17 and Android SDK 35 required), set `BuildConfig.API_BASE_URL` to a reachable backend URL, then build `app` > `assembleDebug`. For an emulator, the default development URL is `http://10.0.2.2:8000/`. For a physical device, use the development machine's LAN address and permit cleartext traffic only in a local development build; production must use HTTPS.
+Open `android/` in Android Studio (JDK 17 and Android SDK 35 required), then build `app` > `assembleDebug`. From PowerShell, `gradle --no-daemon assembleDebug` creates `android/app/build/outputs/apk/debug/app-debug.apk`. For an emulator, the development URL is `http://10.0.2.2:8000/`; for a physical device set `-PapiBaseUrl=http://<host-lan-ip>:8000/`. Cleartext is enabled only for debug builds.
 
-The Android client currently expects a backend accessible over HTTP for local development. Do not ship a cleartext configuration. No signing key is included.
+Release builds require `releaseApiBaseUrl` or `TRAVEL_ASSIST_API_BASE_URL` to be set to HTTPS. Release signing variables are documented in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); no signing key is included.
 
 ## Providers and data integrity
 
@@ -72,6 +76,8 @@ Confirm provider coverage, rights, pricing, refresh/attribution requirements, an
 - Keep secrets in environment/secret storage, never in the Android app or source control. Add HTTPS, rate limits, email verification, key rotation, backups, and operational monitoring before production deployment.
 - The MVP does not implement push notifications, payment/booking flows, or production-grade account recovery.
 
-## Build status
+## Build and verification status
 
-Source and backend tests are the deliverables available from this workspace. The current environment has no JDK, Android SDK, or Gradle installation, so an installable APK could not be generated or verified here. Install the Android toolchain described above and build from `android/`.
+An earlier debug APK was successfully generated at `android/app/build/outputs/apk/debug/app-debug.apk` during this work. Its SHA-256 is `5883C9F16ABE0E2AB74342E7F04A4075B5F05C992AAC78C20AC4037D77AC51BC`. It predates the current Integrations & Add-ons source and is therefore not the final APK for the integrations-center phase. The initial compilation also found and fixed Kotlin package and API/UI call-site errors. Backend tests pass, and the fresh Alembic migration path was validated. Later source rebuild attempts could not complete because the host ran out of JVM native/Metaspace/commit memory; there is no attached emulator or device, so installation and launch were not verified. Rebuild on a host with at least 8 GB free RAM in an environment with fewer concurrent Java processes. See [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) for precise current limitations.
+
+No signed release APK is included: release signing credentials are not available. No live transportation, stay, mapping, notification, or AI provider credentials/adapters are included. The app must not be presented as production-ready until those blockers and the remaining hardening actions in the security review are addressed.

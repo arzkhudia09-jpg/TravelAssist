@@ -36,6 +36,19 @@ All `/api` endpoints require `Authorization: Bearer <access_token>` except regis
 
 Without an authorized provider, searches return HTTP 503 with `detail.code=provider_unavailable`. Only `DEMO_MODE=true` returns synthetic fixtures, marked `data_status=demo` and `is_bookable=false`.
 
+## Integrations and add-ons
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/integrations` | List the supported provider catalog and the caller's admin visibility |
+| POST | `/api/admin/integrations` | Admin-only provider configuration; credentials are Fernet-encrypted and never returned |
+| POST | `/api/admin/integrations/{id}/test` | Admin-only provider connection test and diagnostic status |
+| PATCH, DELETE | `/api/admin/integrations/{id}` | Enable a tested adapter or disconnect a configuration |
+| GET | `/api/addons` | List available user-level add-on preferences |
+| PUT | `/api/addons/{addon_id}` | Enable/disable the caller's add-on preference |
+
+`ADMIN_EMAILS` is a comma-separated backend allowlist; users cannot grant themselves administrator access. Set `INTEGRATION_ENCRYPTION_KEY` to a generated Fernet key before storing credentials. The catalog is allowlisted and does not run user-provided code or call arbitrary URLs. Since no authorized adapters are installed, connection tests report `provider_unavailable` and integrations cannot be activated. Add-on preferences are persisted, but unfinished capabilities (weather, currency, push, and generated AI responses) are not implemented.
+
 ## Expenses, chat, and location
 
 | Method | Path | Purpose |
