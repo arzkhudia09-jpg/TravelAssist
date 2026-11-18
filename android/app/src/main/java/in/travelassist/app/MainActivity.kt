@@ -81,6 +81,7 @@ data class ScreenState(
 class TravelViewModel(private val client: ApiClient) : ViewModel() {
     private val _state = MutableStateFlow(ScreenState())
     val state = _state.asStateFlow()
+    val apiBaseUrl: String get() = client.apiBaseUrl
     private var socket: WebSocket? = null
     private var locationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
     private var locationCallback: LocationCallback? = null
@@ -101,6 +102,15 @@ class TravelViewModel(private val client: ApiClient) : ViewModel() {
         client.vault.save(result.access_token)
         _state.update { it.copy(user = result.user, error = null) }
         loadTripsData()
+    }
+
+    fun configureApiBaseUrl(value: String): Boolean = try {
+        client.configureBaseUrl(value)
+        _state.update { it.copy(error = null) }
+        true
+    } catch (error: Exception) {
+        showError(error.message ?: "Unable to save the API server URL")
+        false
     }
 
     fun signOut() {
@@ -427,7 +437,7 @@ fun TravelAssistApp(model: TravelViewModel) {
     MaterialTheme(colorScheme = if (androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
             if (state.user == null) {
-                AuthScreen(state.busy, state.error, model::authenticate)
+                AuthScreen(state.busy, state.error, model.apiBaseUrl, model::configureApiBaseUrl, model::authenticate)
             } else {
                 Scaffold(
                     topBar = { TopAppBar(title = { Text("Travel Assist") }) },
@@ -469,15 +479,33 @@ fun TravelAssistApp(model: TravelViewModel) {
 }
 
 @Composable
-fun AuthScreen(busy: Boolean, error: String?, authenticate: (String, String, String?, Boolean) -> Unit) {
+fun AuthScreen(
+    busy: Boolean,
+    error: String?,
+    apiBaseUrl: String,
+    configureApiBaseUrl: (String) -> Boolean,
+    authenticate: (String, String, String?, Boolean) -> Unit,
+) {
     var register by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
+    var serverUrl by remember(apiBaseUrl) { mutableStateOf(apiBaseUrl) }
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
         Text("Travel Assist", style = MaterialTheme.typography.headlineLarge)
         Text("Plan together. Travel confidently.", style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(24.dp))
+        OutlinedTextField(
+            serverUrl, { serverUrl = it }, label = { Text("API server URL") },
+            placeholder = { Text("https://api.example.com/") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Text("Set this to your deployed backend before signing in.", style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(
+            onClick = { configureApiBaseUrl(serverUrl) },
+            enabled = !busy && serverUrl.isNotBlank(), modifier = Modifier.fillMaxWidth(),
+        ) { Text("Save server") }
         if (register) TextField(username, { username = it }, label = { Text("Username (optional)") }, modifier = Modifier.fillMaxWidth())
         TextField(email, { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
         TextField(password, { password = it }, label = { Text("Password (10+ characters)") },

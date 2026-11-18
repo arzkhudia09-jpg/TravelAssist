@@ -1,10 +1,10 @@
 package `in`.travelassist.app.data
 
-import `in`.travelassist.app.BuildConfig
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -173,6 +173,8 @@ class TokenVault(context: Context) {
 
 class ApiClient(context: Context, baseUrl: String) {
     val vault = TokenVault(context)
+    private val preferences = context.getSharedPreferences("api_settings", Context.MODE_PRIVATE)
+    @Volatile private var configuredBaseUrl = preferences.getString("base_url", null) ?: baseUrl
     private val http = OkHttpClient.Builder()
         .addInterceptor(Interceptor { chain ->
             val request = chain.request().newBuilder().apply {
@@ -180,16 +182,40 @@ class ApiClient(context: Context, baseUrl: String) {
             }.build()
             chain.proceed(request)
         }).build()
-    val api: TravelApi = Retrofit.Builder()
-        .baseUrl(baseUrl)
+    @Volatile var api: TravelApi = createApi(configuredBaseUrl)
+        private set
+
+    val apiBaseUrl: String get() = configuredBaseUrl
+
+    fun configureBaseUrl(value: String) {
+        val parsed = value.trim().toHttpUrlOrNull()
+            ?: throw IllegalArgumentException("Enter a valid API server URL, such as https://api.example.com/")
+        require(parsed.scheme == "https" || parsed.scheme == "http") {
+            "The API server URL must use HTTPS or HTTP"
+        }
+        require(parsed.username.isEmpty() && parsed.password.isEmpty() && parsed.query == null && parsed.fragment == null) {
+            "The API server URL must not contain credentials, a query, or a fragment"
+        }
+        val normalized = parsed.toString().let { if (it.endsWith("/")) it else "$it/" }
+        val configuredApi = createApi(normalized)
+        check(preferences.edit().putString("base_url", normalized).commit()) {
+            "Unable to save the API server URL"
+        }
+        configuredBaseUrl = normalized
+        api = configuredApi
+    }
+
+    private fun createApi(url: String): TravelApi = Retrofit.Builder()
+        .baseUrl(url)
         .client(http)
         .addConverterFactory(GsonConverterFactory.create())
         .build().create(TravelApi::class.java)
 
     fun openChat(tripId: String, listener: WebSocketListener): WebSocket {
         val token = requireNotNull(vault.read()) { "Sign in before opening trip chat" }
-        val url = Retrofit.Builder().baseUrl(BuildConfig.API_BASE_URL).build()
-            .baseUrl().toString().replaceFirst("http", "ws") + "api/trips/$tripId/chat"
+        val webSocketBaseUrl = apiBaseUrl.replaceFirst("https://", "wss://")
+            .replaceFirst("http://", "ws://")
+        val url = "${webSocketBaseUrl}api/trips/$tripId/chat"
         return http.newWebSocket(Request.Builder().url(url).header("Authorization", "Bearer $token").build(), listener)
     }
 }
