@@ -1,5 +1,6 @@
-package in.travelassist.app.data
+package `in`.travelassist.app.data
 
+import `in`.travelassist.app.BuildConfig
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -17,6 +18,7 @@ import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.DELETE
+import retrofit2.http.PATCH
 import retrofit2.http.Path
 import retrofit2.http.Query
 import java.nio.ByteBuffer
@@ -65,6 +67,21 @@ interface TravelApi {
     @POST("api/auth/register") suspend fun register(@Body body: Credentials): AuthResponse
     @POST("api/auth/login") suspend fun login(@Body body: Credentials): AuthResponse
     @GET("api/auth/me") suspend fun me(): UserDto
+    @GET("api/integrations") suspend fun integrations(): Map<String, Any>
+    @POST("api/admin/integrations") suspend fun configureIntegration(@Body body: Map<String, Any>): Map<String, Any>
+    @POST("api/admin/integrations/{integrationId}/test") suspend fun testIntegration(
+        @Path("integrationId") integrationId: String,
+    ): Map<String, Any>
+    @PATCH("api/admin/integrations/{integrationId}") suspend fun setIntegrationEnabled(
+        @Path("integrationId") integrationId: String, @Body body: Map<String, Boolean>,
+    ): Map<String, Any>
+    @DELETE("api/admin/integrations/{integrationId}") suspend fun removeIntegration(
+        @Path("integrationId") integrationId: String,
+    )
+    @GET("api/addons") suspend fun addons(): List<Map<String, Any>>
+    @PUT("api/addons/{addonId}") suspend fun setAddon(
+        @Path("addonId") addonId: String, @Body body: Map<String, Boolean>,
+    ): Map<String, Any>
     @GET("api/dashboard") suspend fun dashboard(): Map<String, Any>
     @GET("api/trips") suspend fun trips(): List<TripDto>
     @POST("api/trips") suspend fun createTrip(@Body body: TripCreate): TripDto
@@ -86,7 +103,7 @@ interface TravelApi {
         @Path("tripId") tripId: String,
     ): Map<String, Any>
     @POST("api/routes/search") suspend fun searchRoutes(@Body body: RouteRequest): Map<String, Any>
-    @POST("api/routes/recover") suspend fun recoverRoute(@Body body: Map<String, String>): Map<String, Any>
+    @POST("api/routes/recover") suspend fun recoverRoute(@Body body: Map<String, Any>): Map<String, Any>
     @POST("api/stays/search") suspend fun searchStays(@Body body: Map<String, Any>): Map<String, Any>
     @GET("api/trips/{tripId}/expenses") suspend fun expenses(@Path("tripId") tripId: String): List<ExpenseDto>
     @POST("api/trips/{tripId}/expenses") suspend fun addExpense(

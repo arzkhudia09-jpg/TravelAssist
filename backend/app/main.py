@@ -6,17 +6,23 @@ from decimal import Decimal
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .assistant import build_trip_context
 from .db import Base, make_session_factory
-from .models import ChatMessage, Expense, ExpenseSplit, Invitation, ItineraryItem, LocationShare, SavedRoute, Trip, TripMember, User, utcnow
+from .integrations import ADDONS, INTEGRATIONS, provider_registry
+from .models import (
+    ChatMessage, Expense, ExpenseSplit, IntegrationAudit, IntegrationConfig, Invitation,
+    ItineraryItem, LocationShare, SavedRoute, Trip, TripMember, User, UserAddon, utcnow,
+)
 from .providers import ProviderUnavailable, rank_routes, search_stays, search_transport
 from .schemas import (
-    Credentials, ExpenseCreate, InviteCreate, ItineraryItemCreate, LocationUpdate, NicknameUpdate,
-    LocationSharingStart, RouteSearch, SavedRouteCreate, StaySearch, TokenOut, TripCreate, UserOut,
+    AddonUpdate, Credentials, ExpenseCreate, IntegrationCreate, InviteCreate, ItineraryItemCreate,
+    LocationUpdate, NicknameUpdate, LocationSharingStart, RouteSearch, SavedRouteCreate,
+    StaySearch, TokenOut, TripCreate, UserOut,
 )
 from .security import decode_token, hash_password, issue_token, verify_password
 
@@ -64,6 +70,28 @@ def create_app(database_url: str | None = None, auto_create_tables: bool | None 
             raise HTTPException(status_code=401, detail="Account no longer exists")
         return user
 
+    def is_admin(user: User) -> bool:
+        admins = {email.strip().lower() for email in settings.admin_emails.split(",") if email.strip()}
+        return user.email.lower() in admins
+
+    def require_admin(user: User) -> None:
+        if not is_admin(user):
+            raise HTTPException(status_code=403, detail="Administrator access required")
+
+    def integration_cipher() -> Fernet:
+        if not settings.integration_encryption_key:
+            raise HTTPException(status_code=503, detail={
+                "code": "integration_secret_storage_unavailable",
+                "message": "Configure INTEGRATION_ENCRYPTION_KEY before saving provider credentials",
+            })
+        try:
+            return Fernet(settings.integration_encryption_key.encode("ascii"))
+        except (ValueError, UnicodeEncodeError):
+            raise HTTPException(status_code=503, detail={
+                "code": "integration_secret_storage_unavailable",
+                "message": "INTEGRATION_ENCRYPTION_KEY must be a valid Fernet key",
+            })
+
     def authenticated(authorization: str | None, db: Session) -> User:
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Bearer token required")
@@ -80,9 +108,164 @@ def create_app(database_url: str | None = None, auto_create_tables: bool | None 
     def aware_utc(value: datetime) -> datetime:
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
+    def audit_integration(db: Session, actor_id: str, integration_id: str, action: str) -> None:
+        db.add(IntegrationAudit(actor_id=actor_id, integration_id=integration_id, action=action))
+
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/api/integrations")
+    def list_integrations(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
+        user = authenticated(authorization, db)
+        admin = is_admin(user)
+        configured = db.scalars(select(IntegrationConfig).order_by(IntegrationConfig.created_at.desc())).all()
+        configured_by_provider: dict[str, list[IntegrationConfig]] = {}
+        for item in configured:
+            configured_by_provider.setdefault(item.provider_id, []).append(item)
+        return {
+            "is_admin": admin,
+            "integrations": [
+                {
+                    **definition,
+                    "configurations": [
+                        {
+                            "id": item.id,
+                            "display_name": item.display_name,
+                            "status": item.status,
+                            "enabled": item.enabled,
+                            "last_checked_at": item.last_checked_at,
+                            "last_error": item.last_error,
+                        }
+                        for item in configured_by_provider.get(definition["id"], [])
+                    ] if admin else [],
+                }
+                for definition in INTEGRATIONS
+            ],
+        }
+
+    @app.post("/api/admin/integrations", status_code=201)
+    def configure_integration(
+        payload: IntegrationCreate,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
+    ):
+        user = authenticated(authorization, db)
+        require_admin(user)
+        if payload.provider_id not in {item["id"] for item in INTEGRATIONS}:
+            raise HTTPException(status_code=422, detail="Unsupported integration provider")
+        cipher = integration_cipher()
+        item = IntegrationConfig(
+            provider_id=payload.provider_id,
+            display_name=payload.display_name.strip(),
+            credentials_ciphertext=cipher.encrypt(json.dumps(payload.credentials).encode()).decode(),
+            options_json=json.dumps(payload.options),
+            status="configuration_required",
+        )
+        db.add(item)
+        db.flush()
+        audit_integration(db, user.id, item.id, "configured")
+        db.commit()
+        db.refresh(item)
+        return {"id": item.id, "provider_id": item.provider_id, "status": item.status, "enabled": item.enabled}
+
+    @app.post("/api/admin/integrations/{integration_id}/test")
+    def test_integration(
+        integration_id: str,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
+    ):
+        user = authenticated(authorization, db)
+        require_admin(user)
+        item = db.get(IntegrationConfig, integration_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Integration configuration not found")
+        try:
+            credentials = json.loads(integration_cipher().decrypt(item.credentials_ciphertext.encode()))
+            provider_registry.test_connection(item.provider_id, credentials, json.loads(item.options_json))
+        except RuntimeError as error:
+            item.status = "provider_unavailable"
+            item.last_error = str(error)[:500]
+            item.last_checked_at = utcnow()
+            audit_integration(db, user.id, item.id, "test_failed")
+            db.commit()
+            return {"id": item.id, "status": item.status, "diagnostic": item.last_error}
+        except InvalidToken:
+            raise HTTPException(status_code=503, detail={
+                "code": "integration_secret_decryption_failed",
+                "message": "Stored credentials cannot be decrypted; rotate the integration encryption key",
+            })
+        item.status = "connected"
+        item.last_error = None
+        item.last_checked_at = utcnow()
+        audit_integration(db, user.id, item.id, "test_succeeded")
+        db.commit()
+        return {"id": item.id, "status": item.status, "diagnostic": "Connection test succeeded"}
+
+    @app.patch("/api/admin/integrations/{integration_id}")
+    def set_integration_enabled(
+        integration_id: str,
+        payload: AddonUpdate,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
+    ):
+        user = authenticated(authorization, db)
+        require_admin(user)
+        item = db.get(IntegrationConfig, integration_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Integration configuration not found")
+        if payload.enabled and item.status != "connected":
+            raise HTTPException(status_code=409, detail="Test and connect this integration before enabling it")
+        if payload.enabled and not provider_registry.has_adapter(item.provider_id):
+            raise HTTPException(status_code=409, detail="No provider adapter is installed for this integration")
+        item.enabled = payload.enabled
+        item.status = "active" if payload.enabled else ("disabled" if item.status == "connected" else item.status)
+        audit_integration(db, user.id, item.id, "enabled" if payload.enabled else "disabled")
+        db.commit()
+        return {"id": item.id, "status": item.status, "enabled": item.enabled}
+
+    @app.delete("/api/admin/integrations/{integration_id}", status_code=204)
+    def remove_integration(
+        integration_id: str,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
+    ):
+        user = authenticated(authorization, db)
+        require_admin(user)
+        item = db.get(IntegrationConfig, integration_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Integration configuration not found")
+        audit_integration(db, user.id, item.id, "removed")
+        db.delete(item)
+        db.commit()
+
+    @app.get("/api/addons")
+    def list_addons(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
+        user = authenticated(authorization, db)
+        saved = {
+            addon.addon_id: addon.enabled
+            for addon in db.scalars(select(UserAddon).where(UserAddon.user_id == user.id)).all()
+        }
+        return [{"id": addon["id"], **addon, "enabled": saved.get(addon["id"], False)} for addon in ADDONS]
+
+    @app.put("/api/addons/{addon_id}")
+    def set_addon(
+        addon_id: str,
+        payload: AddonUpdate,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
+    ):
+        user = authenticated(authorization, db)
+        if addon_id not in {addon["id"] for addon in ADDONS}:
+            raise HTTPException(status_code=404, detail="Add-on not found")
+        item = db.scalar(select(UserAddon).where(UserAddon.user_id == user.id, UserAddon.addon_id == addon_id))
+        if item is None:
+            item = UserAddon(user_id=user.id, addon_id=addon_id, enabled=payload.enabled)
+            db.add(item)
+        else:
+            item.enabled = payload.enabled
+        db.commit()
+        return {"id": addon_id, "enabled": item.enabled}
 
     @app.post("/api/auth/register", response_model=TokenOut, status_code=201)
     def register(payload: Credentials, db: Session = Depends(get_db)):

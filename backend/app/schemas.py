@@ -105,3 +105,29 @@ class LocationUpdate(BaseModel):
 class LocationSharingStart(BaseModel):
     session_id: UUID
     duration_minutes: int = Field(default=60, ge=1, le=1440)
+
+
+class IntegrationCreate(BaseModel):
+    provider_id: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=2, max_length=100)
+    credentials: dict[str, str] = Field(min_length=1, max_length=20)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("credentials")
+    @classmethod
+    def validate_credentials(cls, value):
+        if any(not key.strip() or len(key) > 80 or not secret or len(secret) > 4096 for key, secret in value.items()):
+            raise ValueError("credential names and values must be non-empty and within size limits")
+        return value
+
+    @field_validator("options")
+    @classmethod
+    def limit_options_size(cls, value):
+        import json
+        if len(json.dumps(value)) > 16_000:
+            raise ValueError("integration options are too large")
+        return value
+
+
+class AddonUpdate(BaseModel):
+    enabled: bool

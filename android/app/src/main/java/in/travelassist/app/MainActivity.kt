@@ -1,4 +1,4 @@
-package in.travelassist.app
+package `in`.travelassist.app
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -33,7 +33,7 @@ import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
-import in.travelassist.app.data.*
+import `in`.travelassist.app.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -60,6 +60,8 @@ data class ScreenState(
     val trips: List<TripDto> = emptyList(),
     val savedRoutes: List<SavedRouteDto> = emptyList(),
     val dashboard: Map<String, Any>? = null,
+    val integrationCatalog: Map<String, Any>? = null,
+    val addons: List<Map<String, Any>> = emptyList(),
     val activeTrip: TripDto? = null,
     val members: List<MemberDto> = emptyList(),
     val itinerary: List<ItineraryDto> = emptyList(),
@@ -130,6 +132,8 @@ class TravelViewModel(private val client: ApiClient) : ViewModel() {
             dashboard = client.api.dashboard(),
             invitations = client.api.invitations(),
             savedRoutes = client.api.savedRoutes(),
+            integrationCatalog = client.api.integrations(),
+            addons = client.api.addons(),
         ) }
         trips.firstOrNull()?.let { loadTrip(it) }
     }
@@ -148,9 +152,45 @@ class TravelViewModel(private val client: ApiClient) : ViewModel() {
         _state.update { it.copy(
             trips = trips, dashboard = client.api.dashboard(),
             invitations = client.api.invitations(), savedRoutes = client.api.savedRoutes(),
+            integrationCatalog = client.api.integrations(), addons = client.api.addons(),
             activeTrip = _state.value.activeTrip?.takeIf { active -> trips.any { it.id == active.id } },
         ) }
         trips.firstOrNull()?.let { loadTrip(it) }
+    }
+
+    fun configureIntegration(providerId: String, displayName: String, apiKey: String) = action {
+        require(apiKey.isNotBlank()) { "Enter the provider credential" }
+        client.api.configureIntegration(mapOf(
+            "provider_id" to providerId,
+            "display_name" to displayName,
+            "credentials" to mapOf("api_key" to apiKey),
+        ))
+        _state.update { it.copy(integrationCatalog = client.api.integrations()) }
+    }
+
+    fun testIntegration(integrationId: String) = action {
+        val result = client.api.testIntegration(integrationId)
+        _state.update { it.copy(integrationCatalog = client.api.integrations()) }
+        result["diagnostic"]?.toString()?.takeIf { it.isNotBlank() }?.let(::showError)
+    }
+
+    fun setIntegrationEnabled(integrationId: String, enabled: Boolean) = action {
+        client.api.setIntegrationEnabled(integrationId, mapOf("enabled" to enabled))
+        _state.update { it.copy(integrationCatalog = client.api.integrations()) }
+    }
+
+    fun removeIntegration(integrationId: String) = action {
+        client.api.removeIntegration(integrationId)
+        _state.update { it.copy(integrationCatalog = client.api.integrations()) }
+    }
+
+    fun setAddon(addonId: String, enabled: Boolean) = action {
+        client.api.setAddon(addonId, mapOf("enabled" to enabled))
+        _state.update { it.copy(addons = client.api.addons()) }
+    }
+
+    fun refreshIntegrationCenter() = action {
+        _state.update { it.copy(integrationCatalog = client.api.integrations(), addons = client.api.addons()) }
     }
 
     private suspend fun loadTrip(trip: TripDto) {
@@ -414,7 +454,11 @@ fun TravelAssistApp(model: TravelViewModel) {
                             "Discover" -> DiscoverScreen(state, model)
                             "Expenses" -> ExpenseScreen(state, model)
                             "Trip tools" -> TripToolsScreen(state, model)
-                            "Profile" -> ProfileScreen(state, model)
+                            "Profile" -> ProfileScreen(state, model) {
+                                screen = "Integrations"
+                                model.refreshIntegrationCenter()
+                            }
+                            "Integrations" -> IntegrationsScreen(state, model)
                             else -> TripsScreen(state, model)
                         }
                     }
@@ -469,7 +513,7 @@ fun TripsScreen(state: ScreenState, model: TravelViewModel) {
         enabled = name.isNotBlank() && destination.isNotBlank()) { Text("Create trip") }
     Column {
         state.trips.forEach { trip ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 5.dp), onClick = { model.selectTrip(trip) }) {
+            Card(onClick = { model.selectTrip(trip) }, modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Text(trip.name, style = MaterialTheme.typography.titleMedium)
                     Text(trip.destination)
@@ -662,11 +706,116 @@ fun TripToolsScreen(state: ScreenState, model: TravelViewModel) {
 }
 
 @Composable
-fun ProfileScreen(state: ScreenState, model: TravelViewModel) {
+fun ProfileScreen(state: ScreenState, model: TravelViewModel, onIntegrations: () -> Unit) {
     Text("Profile", style = MaterialTheme.typography.headlineMedium)
     Text(state.user?.username.orEmpty())
     Text(state.user?.email.orEmpty())
+    Button(onClick = onIntegrations) { Text("Integrations & Add-ons") }
     Button(onClick = model::signOut) { Text("Sign out") }
+}
+
+@Composable
+fun IntegrationsScreen(state: ScreenState, model: TravelViewModel) {
+    val catalog = state.integrationCatalog
+    val providers = (catalog?.get("integrations") as? List<*>)
+        ?.mapNotNull { it as? Map<*, *> }.orEmpty()
+    val isAdmin = catalog?.get("is_admin") as? Boolean ?: false
+    var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("all") }
+    var selectedProvider by remember { mutableStateOf("") }
+    var displayName by remember { mutableStateOf("") }
+    var credential by remember { mutableStateOf("") }
+    val categories = listOf("all", "transport", "maps", "accommodation", "ai")
+
+    Text("Integrations & Add-ons", style = MaterialTheme.typography.headlineMedium)
+    Text(
+        if (isAdmin) "Administrator provider settings. Credentials are encrypted on the backend."
+        else "Browse supported providers and manage your personal add-ons."
+    )
+    OutlinedTextField(query, { query = it }, label = { Text("Search integrations") }, modifier = Modifier.fillMaxWidth())
+    Row {
+        categories.forEach { option ->
+            FilterChip(selected = category == option, onClick = { category = option }, label = { Text(option) })
+        }
+    }
+    providers.filter { provider ->
+        val name = provider["name"]?.toString().orEmpty()
+        val description = provider["description"]?.toString().orEmpty()
+        (category == "all" || provider["category"]?.toString() == category)
+            && (query.isBlank() || name.contains(query, true) || description.contains(query, true))
+    }.forEach { provider ->
+        val id = provider["id"]?.toString().orEmpty()
+        Card(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                Text(provider["name"]?.toString().orEmpty(), style = MaterialTheme.typography.titleMedium)
+                Text(provider["category"]?.toString().orEmpty())
+                Text(provider["description"]?.toString().orEmpty())
+                (provider["features"] as? List<*>)?.joinToString()?.takeIf { it.isNotBlank() }?.let { Text("Features: $it") }
+                (provider["documentation_url"] as? String)?.let { url ->
+                    val uriHandler = LocalUriHandler.current
+                    TextButton(onClick = { uriHandler.openUri(url) }) { Text("Documentation") }
+                }
+                val configurations = (provider["configurations"] as? List<*>)
+                    ?.mapNotNull { it as? Map<*, *> }.orEmpty()
+                configurations.forEach { configured ->
+                    val integrationId = configured["id"]?.toString().orEmpty()
+                    Text("${configured["display_name"]} · ${configured["status"]}")
+                    if (isAdmin) {
+                        Row {
+                            TextButton(onClick = { model.testIntegration(integrationId) }) { Text("Test connection") }
+                            TextButton(onClick = { model.removeIntegration(integrationId) }) { Text("Disconnect") }
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text("Enabled")
+                            Switch(
+                                checked = configured["enabled"] as? Boolean ?: false,
+                                onCheckedChange = { model.setIntegrationEnabled(integrationId, it) },
+                            )
+                        }
+                        configured["last_error"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+                            Text("Diagnostic: $it", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                if (isAdmin) {
+                    TextButton(onClick = {
+                        selectedProvider = id
+                        displayName = provider["name"]?.toString().orEmpty()
+                        credential = ""
+                    }) { Text(if (selectedProvider == id) "Selected" else "Configure") }
+                }
+            }
+        }
+    }
+    if (isAdmin && selectedProvider.isNotBlank()) {
+        Text("Add provider configuration", style = MaterialTheme.typography.titleLarge)
+        OutlinedTextField(displayName, { displayName = it }, label = { Text("Configuration name") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(credential, { credential = it }, label = { Text("Provider API credential") },
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        Button(
+            onClick = {
+                model.configureIntegration(selectedProvider, displayName, credential)
+                credential = ""
+                selectedProvider = ""
+            },
+            enabled = displayName.isNotBlank() && credential.isNotBlank() && !state.busy,
+        ) { Text("Save encrypted configuration") }
+        Text("Credentials are sent only to the backend and are never returned by its APIs.")
+    }
+
+    Text("Your add-ons", style = MaterialTheme.typography.titleLarge)
+    state.addons.forEach { addon ->
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text(addon["name"]?.toString().orEmpty())
+                Text(addon["category"]?.toString().orEmpty(), style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(
+                checked = addon["enabled"] as? Boolean ?: false,
+                onCheckedChange = { model.setAddon(addon["id"]?.toString().orEmpty(), it) },
+            )
+        }
+    }
 }
 
 @Composable

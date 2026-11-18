@@ -178,3 +178,54 @@ def test_saved_routes_are_private_and_deletable(client):
     assert client.get("/api/saved-routes", headers=other_headers).json() == []
     assert client.delete(f"/api/saved-routes/{route_id}", headers=other_headers).status_code == 404
     assert client.delete(f"/api/saved-routes/{route_id}", headers=owner_headers).status_code == 204
+
+
+def test_integration_management_is_admin_only_and_never_returns_credentials(client, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr(settings, "admin_emails", "a@example.com")
+    monkeypatch.setattr(settings, "integration_encryption_key", Fernet.generate_key().decode())
+    _, admin_headers = register(client)
+    _, user_headers = register(client, "user@example.com", "regular")
+
+    catalog = client.get("/api/integrations", headers=user_headers)
+    assert catalog.status_code == 200
+    assert catalog.json()["is_admin"] is False
+    assert client.post("/api/admin/integrations", headers=user_headers, json={
+        "provider_id": "google_maps",
+        "display_name": "Maps",
+        "credentials": {"api_key": "do-not-return-this"},
+    }).status_code == 403
+
+    configured = client.post("/api/admin/integrations", headers=admin_headers, json={
+        "provider_id": "google_maps",
+        "display_name": "Maps production",
+        "credentials": {"api_key": "do-not-return-this"},
+        "options": {"region": "IN"},
+    })
+    assert configured.status_code == 201, configured.text
+    integration_id = configured.json()["id"]
+    response_text = client.get("/api/integrations", headers=admin_headers).text
+    assert "do-not-return-this" not in response_text
+    assert configured.json()["status"] == "configuration_required"
+
+    tested = client.post(f"/api/admin/integrations/{integration_id}/test", headers=admin_headers)
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "provider_unavailable"
+    assert client.patch(f"/api/admin/integrations/{integration_id}", headers=admin_headers,
+                        json={"enabled": True}).status_code == 409
+    assert client.delete(f"/api/admin/integrations/{integration_id}", headers=admin_headers).status_code == 204
+
+
+def test_user_addons_are_private_and_persisted(client):
+    _, owner_headers = register(client)
+    _, other_headers = register(client, "other@example.com", "other")
+    enabled = client.put("/api/addons/weather", headers=owner_headers, json={"enabled": True})
+    assert enabled.status_code == 200
+    assert enabled.json() == {"id": "weather", "enabled": True}
+    assert next(item for item in client.get("/api/addons", headers=owner_headers).json()
+                if item["id"] == "weather")["enabled"] is True
+    assert next(item for item in client.get("/api/addons", headers=other_headers).json()
+                if item["id"] == "weather")["enabled"] is False
+    assert client.put("/api/addons/not-supported", headers=owner_headers,
+                      json={"enabled": True}).status_code == 404
