@@ -50,6 +50,8 @@ Tests use a temporary SQLite database and do not require PostgreSQL or provider 
 
 ## Android
 
+[Download the installable debug APK](downloads/TravelAssist-debug.apk).
+
 Open `android/` in Android Studio (JDK 17 and Android SDK 35 required), then build `app` > `assembleDebug`. From PowerShell, `gradle --no-daemon assembleDebug` creates `android/app/build/outputs/apk/debug/app-debug.apk`. For an emulator, the development URL is `http://10.0.2.2:8000/`; for a physical device set `-PapiBaseUrl=http://<host-lan-ip>:8000/`. Cleartext is enabled only for debug builds.
 
 The sign-in screen also lets you set the API server URL after installing the APK. Use the public HTTPS URL of a deployed backend, or a reachable LAN URL for local development; the backend must be running and initialized before registration or sign-in will work. The app does not bundle or host the backend.

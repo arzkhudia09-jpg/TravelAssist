@@ -491,7 +491,10 @@ fun AuthScreen(
     var password by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var serverUrl by remember(apiBaseUrl) { mutableStateOf(apiBaseUrl) }
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Center,
+    ) {
         Text("Travel Assist", style = MaterialTheme.typography.headlineLarge)
         Text("Plan together. Travel confidently.", style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(24.dp))

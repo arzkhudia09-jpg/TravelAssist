@@ -1,5 +1,6 @@
 package `in`.travelassist.app.data
 
+import `in`.travelassist.app.BuildConfig
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -190,8 +191,8 @@ class ApiClient(context: Context, baseUrl: String) {
     fun configureBaseUrl(value: String) {
         val parsed = value.trim().toHttpUrlOrNull()
             ?: throw IllegalArgumentException("Enter a valid API server URL, such as https://api.example.com/")
-        require(parsed.scheme == "https" || parsed.scheme == "http") {
-            "The API server URL must use HTTPS or HTTP"
+        require(parsed.scheme == "https" || (BuildConfig.DEBUG && parsed.scheme == "http")) {
+            "Use HTTPS for the API server, or HTTP in a debug build"
         }
         require(parsed.username.isEmpty() && parsed.password.isEmpty() && parsed.query == null && parsed.fragment == null) {
             "The API server URL must not contain credentials, a query, or a fragment"
