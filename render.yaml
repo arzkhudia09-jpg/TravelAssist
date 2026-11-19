@@ -3,7 +3,7 @@ services:
     name: travel-assist-api
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: .
+    dockerContext: ./backend
     healthCheckPath: /health
     preDeployCommand: alembic upgrade head
     envVars:

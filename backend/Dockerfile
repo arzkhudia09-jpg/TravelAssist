@@ -5,12 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app/backend
 
-COPY backend/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/alembic.ini ./alembic.ini
-COPY backend/app ./app
-COPY backend/migrations ./migrations
+COPY alembic.ini ./alembic.ini
+COPY app ./app
+COPY migrations ./migrations
 
 RUN useradd --system --uid 10001 --create-home appuser
 USER 10001
