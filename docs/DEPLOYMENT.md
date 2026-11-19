@@ -1,5 +1,79 @@
 # Deployment and release guide
 
+## Architecture
+
+The FastAPI backend uses synchronous SQLAlchemy and the `psycopg` PostgreSQL driver. Neon supplies the production database:
+
+- `DATABASE_URL` — Neon pooled connection string used by application sessions.
+- `DATABASE_URL_DIRECT` — direct Neon connection string used by Alembic migrations.
+
+Local development and tests may use SQLite only by setting an explicit SQLite URL or passing a test URL to `create_app`. Production is PostgreSQL-only and fails startup when `DATABASE_URL` or `ENVIRONMENT=production` is invalid. The Docker image does not create or migrate SQLite files.
+
+## Neon setup
+
+1. Create or select a Neon project and a database branch for development/testing.
+2. Copy the pooled connection string into `DATABASE_URL`.
+3. Copy the direct connection string into `DATABASE_URL_DIRECT`.
+4. Confirm both strings use `postgresql+psycopg://` (or `postgresql://`) and include `sslmode=require`.
+5. Create a least-privilege migration role if migrations are run separately from runtime, or use separate migration/runtime credentials.
+6. Never put Neon credentials in source control or the Android APK.
+
+The SQLAlchemy engine uses `pool_pre_ping`, a 300-second recycle, bounded pooling, a 15-second pool wait, and a 10-second connection timeout. It validates PostgreSQL connections with `pool_pre_ping` after Neon compute suspension. Neon transaction pooling is intended for normal application traffic; migrations use the direct endpoint.
+
+## Migration commands
+
+Create an explicit backup/checkpoint before the first or every destructive migration. Run migrations once from a controlled release step, never concurrently in application replicas:
+
+```powershell
+cd backend
+$env:DATABASE_URL_DIRECT="postgresql+psycopg://...direct...?...sslmode=require"
+$env:DATABASE_URL="postgresql+psycopg://...pooled...?...sslmode=require"
+$env:ENVIRONMENT="production"
+alembic upgrade head
+alembic current
+```
+
+To generate a future migration:
+
+```powershell
+alembic revision --autogenerate -m "describe_schema_change"
+alembic upgrade head
+```
+
+Review every generated migration before applying it. Existing migrations are preserved and Alembic version tracking makes upgrades repeatable.
+
+## Render deployment
+
+The repository includes `render.yaml` for an infrastructure-as-code web service:
+
+- Runtime: Docker
+- Dockerfile: `backend/Dockerfile`
+- Docker build context: repository root
+- Health check: `/health`
+- Pre-deploy command: `alembic upgrade head`
+- Container port: Render's `PORT` value
+- Bind address: `0.0.0.0`
+
+Create the service from `render.yaml`, then set every `sync: false` secret in the Render Dashboard:
+
+```text
+DATABASE_URL
+DATABASE_URL_DIRECT
+CORS_ORIGINS
+ADMIN_EMAILS
+INTEGRATION_ENCRYPTION_KEY
+```
+
+Set `ENVIRONMENT=production`, `AUTO_CREATE_TABLES=false`, `DEMO_MODE=false`, and `ACCESS_TOKEN_MINUTES=60`. Render pre-deploy migrations run once as a release step. Do not start migrations in the application container command or add them to the Docker startup command.
+
+After deployment:
+
+1. Open `https://<render-service>.onrender.com/health`.
+2. Open `https://<render-service>.onrender.com/ready`.
+3. Verify `alembic current` against the direct Neon endpoint.
+4. Configure the Android release URL with `TRAVEL_ASSIST_API_BASE_URL=https://<render-service>.onrender.com/`.
+5. Build the release APK and verify sign-in, trips, and WSS chat.
+
 ## Local backend with Docker Compose
 
 1. Copy `.env.example` to `.env`.

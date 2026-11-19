@@ -8,6 +8,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -28,7 +30,20 @@ from .security import decode_token, hash_password, issue_token, verify_password
 
 
 def create_app(database_url: str | None = None, auto_create_tables: bool | None = None) -> FastAPI:
-    engine, session_factory = make_session_factory(database_url or settings.database_url)
+    resolved_database_url = database_url
+    if resolved_database_url is None:
+        resolved_database_url = settings.database_url
+    if not resolved_database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required. Configure a Neon PostgreSQL pooled connection "
+            "string; SQLite is only available for explicit local/test database URLs."
+        )
+    if settings.environment.lower() == "production" and not resolved_database_url.startswith(
+        ("postgresql://", "postgresql+psycopg://", "postgres://")
+    ):
+        raise RuntimeError("Production requires DATABASE_URL to be PostgreSQL")
+
+    engine, session_factory = make_session_factory(resolved_database_url)
     should_create_tables = database_url is not None or settings.auto_create_tables
     if auto_create_tables is not None:
         should_create_tables = auto_create_tables
@@ -114,6 +129,15 @@ def create_app(database_url: str | None = None, auto_create_tables: bool | None 
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/ready")
+    def ready():
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            raise HTTPException(status_code=503, detail="Database is not ready")
+        return {"status": "ready"}
 
     @app.get("/api/integrations")
     def list_integrations(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
@@ -644,4 +668,7 @@ def create_app(database_url: str | None = None, auto_create_tables: bool | None 
     return app
 
 
-app = create_app()
+if settings.environment.lower() == "production":
+    app = create_app()
+else:
+    app = create_app(settings.database_url or "sqlite:///./travel_assist.db")

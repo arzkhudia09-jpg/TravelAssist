@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: travel-assist-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    preDeployCommand: alembic upgrade head
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: 60
+      - key: DEMO_MODE
+        value: false
+      - key: AUTO_CREATE_TABLES
+        value: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: INTEGRATION_ENCRYPTION_KEY
+        sync: false

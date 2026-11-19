@@ -20,6 +20,7 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://travel:${POSTGRES_PASSWORD:-change-me}@db:5432/travel_assist
+      DATABASE_URL_DIRECT: postgresql+psycopg://travel:${POSTGRES_PASSWORD:-change-me}@db:5432/travel_assist
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-60}
       DEMO_MODE: ${DEMO_MODE:-false}

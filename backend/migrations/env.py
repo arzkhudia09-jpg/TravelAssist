@@ -9,7 +9,15 @@ from app import models
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-database_url = os.getenv("DATABASE_URL", settings.database_url)
+database_url = os.getenv("DATABASE_URL_DIRECT") or os.getenv("DATABASE_URL") or settings.database_url_direct or settings.database_url
+if not database_url:
+    raise RuntimeError(
+        "DATABASE_URL_DIRECT (preferred) or DATABASE_URL is required for Alembic migrations"
+    )
+if os.getenv("ENVIRONMENT", "").lower() == "production" and not database_url.startswith(
+    ("postgresql://", "postgresql+psycopg://", "postgres://")
+):
+    raise RuntimeError("Production migrations require a PostgreSQL DATABASE_URL_DIRECT or DATABASE_URL")
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 

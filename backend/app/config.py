@@ -4,7 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./travel_assist.db"
+    database_url: str | None = None
+    database_url_direct: str | None = None
+    environment: str = "development"
+    render: bool = False
     jwt_secret: str = "local-development-secret-change-before-deploy"
     access_token_minutes: int = 60
     demo_mode: bool = False
